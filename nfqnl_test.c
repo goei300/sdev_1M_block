@@ -43,36 +43,42 @@ bool isHTTP(unsigned char* buf, int length) {
     return false;
 }
 
-// 이진 탐색 함수
-bool binarySearch(FILE *hSite, const unsigned char *site) {
+bool binarySearch(FILE *hSite, const char *site) {
     fseek(hSite, 0, SEEK_END);
     long fileSize = ftell(hSite);
-
     long left = 0, right = fileSize - 1;
-
-    char buffer[105];
+    char buffer[105]; // 각 줄의 최대 길이
 
     while (left <= right) {
         long middle = left + (right - left) / 2;
-
         fseek(hSite, middle, SEEK_SET);
-        fgets(buffer, sizeof(buffer), hSite);
 
-        buffer[strcspn(buffer, "\n")] = '\0';
+        if (middle != 0) {
+            // 중간 위치가 파일의 시작이 아니면 다음 줄의 시작으로 이동
+            fgets(buffer, sizeof(buffer), hSite); // 현재 줄의 나머지 부분을 읽고 버림
+        }
 
-        int cmp = strcmp((const char *)site, buffer);
+        if (!fgets(buffer, sizeof(buffer), hSite)) {
+            // 파일의 끝에 도달하거나 읽을 수 없으면 실패
+            return false;
+        }
 
+        buffer[strcspn(buffer, "\n")] = '\0'; // 줄바꿈 문자 제거
+
+        int cmp = strcmp(site, buffer);
         if (cmp == 0) {
+            // 완전히 일치하는 줄을 찾음
             return true;
         } else if (cmp < 0) {
+            // 중간 값보다 작으면 왼쪽 검색 범위를 조정
             right = middle - 1;
         } else {
+            // 중간 값보다 크면 오른쪽 검색 범위를 조정
             left = middle + 1;
         }
     }
 
-    // 탐색 실패
-    return false;
+    return false; // 찾지 못함
 }
 
 
@@ -83,32 +89,26 @@ bool isHost(unsigned char* site, FILE *hSite) {
 unsigned char* dump(unsigned char* buf, int size) {
     unsigned char* http_start = get_http_start_address(buf);
     int start_idx = 0;
-
     for (int i = 0; i < size - 1; i++) {
         if (http_start[i] == '\r' && http_start[i + 1] == '\n') {
             start_idx = i + 2;
             break;
         }
     }
+    http_start += start_idx + 6;  // "Host: " 다음부터 읽기 시작
 
-    // Host 헤더 시작 위치로 이동
-    http_start += start_idx + 6;
-
-    if (host_str != NULL) {
-        free(host_str); // 이전에 할당된 host_str 메모리 해제
-    }
-
-    host_str = malloc(256);
+    unsigned char* host_str = malloc(256); 
     if (!host_str) {
         return NULL;
     }
+    memset(host_str, 0, 256);  // 메모리 초기화
 
     int host_len = 0;
-    while (http_start[host_len] != '\r' && http_start[host_len + 1] != '\n') {
-        host_str[host_len] = http_start[host_len];
+    for (int i = 0; i < 255 && http_start[i] != '\r' && http_start[i + 1] != '\n'; i++) {  // 버퍼 크기 체크
+        host_str[i] = http_start[i];
         host_len++;
     }
-    host_str[host_len] = '\0';
+    host_str[host_len] = '\0';  
 
     return host_str;
 }
@@ -141,10 +141,11 @@ static u_int32_t print_pkt(struct nfq_data *tb) {
     ret = nfq_get_payload(tb, &data);
     if (ret >= 0 && isHTTP(data, ret)) {
         host_str = dump(data, ret);
+        printf("net is %s\n\n", host_str);
         ack = true;
     }
 
-    fputc('\n', stdout);
+    //fputc('\n', stdout);
 
     return id;
 }
@@ -154,14 +155,12 @@ static int cb(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
     u_int32_t id = print_pkt(nfa);
 
     if (ack) {
-        for (int i = 0; i < arrSize; i++) {
-            if (isHost(host_str, txtFile)) {
-                printf("blocked! site : %s\n\n", host_str);
-                free(host_str);
-                ack = false;
-                host_str = NULL;
-                return nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
-            }
+        if (isHost(host_str, txtFile)) {
+            printf("blocked! site : %s\n\n", host_str);
+            free(host_str);
+            ack = false;
+            host_str = NULL;
+            return nfq_set_verdict(qh, id, NF_DROP, 0, NULL);
         }
     }
 
@@ -180,8 +179,8 @@ int main(int argc, char **argv) {
     char buf[4096] __attribute__ ((aligned));
 
     txtFile=fopen(argv[1],"r+");
-	if(harmfulSite==NULL){
-		printf("오류..;;;");
+	if(txtFile==NULL){
+		printf("can't read file");
 	}
 
     if (argc < 2) {
